@@ -23,10 +23,14 @@ class MyApp extends StatelessWidget {
 
 class MapScreen extends StatefulWidget {
   @override
-  _MapScreenState createState() => _MapScreenState();
+  MapScreenState createState() => MapScreenState();
+
+  // Exposição dos pontos A e B para testes
+  LatLng? getPointA() => createState().pointA;
+  LatLng? getPointB() => createState().pointB;
 }
 
-class _MapScreenState extends State<MapScreen> {
+class MapScreenState extends State<MapScreen> {
   LatLng? pointA;
   LatLng? pointB;
   List<LatLng> routePoints = [];
@@ -34,74 +38,82 @@ class _MapScreenState extends State<MapScreen> {
   TextEditingController searchControllerB = TextEditingController();
 
   @override
-  void initState() {
-    super.initState();
+  void dispose() {
+    // Liberar o controlador ao sair
+    searchControllerA.dispose();
+    searchControllerB.dispose();
+    super.dispose();
   }
 
-  Future<void> _getRoute() async {
+  Future<void> getRoute() async {
     if (pointA == null || pointB == null) return;
 
     final url =
         'http://router.project-osrm.org/route/v1/driving/${pointA!.longitude},${pointA!.latitude};${pointB!.longitude},${pointB!.latitude}?geometries=geojson';
 
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      final route = data['routes'][0]['geometry']['coordinates'];
-      final List<LatLng> points = route
-          .map<LatLng>((point) => LatLng(point[1], point[0]))
-          .toList();
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final route = data['routes'][0]['geometry']['coordinates'];
+        final List<LatLng> points = route
+            .map<LatLng>((point) => LatLng(point[1], point[0]))
+            .toList();
 
-      setState(() {
-        routePoints = points;
-      });
-    } else {
-      print('Erro ao obter rota: ${response.reasonPhrase}');
+        setState(() {
+          routePoints = points;
+        });
+      } else {
+        print('Erro ao obter rota: ${response.reasonPhrase}');
+      }
+    } catch (e) {
+      print('Erro na requisição de rota: $e');
     }
   }
 
   Future<LatLng?> _searchLocation(String query) async {
     final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1');
-    final response = await http.get(url);
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      if (data.isNotEmpty) {
-        final lat = double.parse(data[0]['lat']);
-        final lon = double.parse(data[0]['lon']);
-        return LatLng(lat, lon);
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data.isNotEmpty) {
+          final lat = double.parse(data[0]['lat']);
+          final lon = double.parse(data[0]['lon']);
+          return LatLng(lat, lon);
+        } else {
+          print('Nenhum resultado encontrado.');
+        }
       } else {
-        print('Nenhum resultado encontrado.');
-        return null;
+        print('Erro ao buscar local: ${response.reasonPhrase}');
       }
-    } else {
-      print('Erro ao buscar local: ${response.reasonPhrase}');
-      return null;
+    } catch (e) {
+      print('Erro ao buscar local: $e');
     }
+    return null;
+  }
+
+  void _setPoint(LatLng? point, bool isPointA) {
+    setState(() {
+      if (isPointA) {
+        pointA = point;
+      } else {
+        pointB = point;
+      }
+      if (pointA != null && pointB != null) {
+        getRoute();
+      }
+    });
   }
 
   void _searchAndSetPointA() async {
     final result = await _searchLocation(searchControllerA.text);
-    if (result != null) {
-      setState(() {
-        pointA = result;
-        if (pointB != null) {
-          _getRoute();
-        }
-      });
-    }
+    _setPoint(result, true);
   }
 
   void _searchAndSetPointB() async {
     final result = await _searchLocation(searchControllerB.text);
-    if (result != null) {
-      setState(() {
-        pointB = result;
-        if (pointA != null) {
-          _getRoute();
-        }
-      });
-    }
+    _setPoint(result, false);
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng latlng) {
@@ -110,7 +122,7 @@ class _MapScreenState extends State<MapScreen> {
         pointA = latlng;
       } else if (pointB == null) {
         pointB = latlng;
-        _getRoute();
+        getRoute();
       } else {
         pointA = latlng;
         pointB = null;
