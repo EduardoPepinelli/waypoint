@@ -3,6 +3,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'dart:convert';
+import 'dart:async';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 void main() {
   runApp(MyApp());
@@ -36,6 +38,7 @@ class MapScreenState extends State<MapScreen> {
   List<LatLng> routePoints = [];
   TextEditingController searchControllerA = TextEditingController();
   TextEditingController searchControllerB = TextEditingController();
+  final secureStorage = FlutterSecureStorage();
 
   @override
   void dispose() {
@@ -49,48 +52,91 @@ class MapScreenState extends State<MapScreen> {
     if (pointA == null || pointB == null) return;
 
     final url =
-        'http://router.project-osrm.org/route/v1/driving/${pointA!.longitude},${pointA!.latitude};${pointB!.longitude},${pointB!.latitude}?geometries=geojson';
+        'https://router.project-osrm.org/route/v1/driving/${pointA!.longitude},${pointA!.latitude};${pointB!.longitude},${pointB!.latitude}?geometries=geojson';
 
     try {
-      final response = await http.get(Uri.parse(url));
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10)); // Timeout de 10 segundos
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final route = data['routes'][0]['geometry']['coordinates'];
-        final List<LatLng> points = route
-            .map<LatLng>((point) => LatLng(point[1], point[0]))
-            .toList();
+        final List<LatLng> points =
+            route.map<LatLng>((point) => LatLng(point[1], point[0])).toList();
 
         setState(() {
           routePoints = points;
         });
       } else {
-        print('Erro ao obter rota: ${response.reasonPhrase}');
+        _showMessage('Erro ao obter rota: ${response.reasonPhrase}');
       }
+    } on TimeoutException {
+      _showMessage('Requisição de rota expirou.');
     } catch (e) {
-      print('Erro na requisição de rota: $e');
+      _showMessage('Erro na requisição de rota: $e');
     }
   }
 
   Future<LatLng?> _searchLocation(String query) async {
-    final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1');
+    final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1');
     try {
-      final response = await http.get(url);
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data.isNotEmpty) {
-          final lat = double.parse(data[0]['lat']);
-          final lon = double.parse(data[0]['lon']);
-          return LatLng(lat, lon);
+        if (data is List && data.isNotEmpty && data[0] is Map) {
+          final lat = double.tryParse(data[0]['lat']);
+          final lon = double.tryParse(data[0]['lon']);
+          if (lat != null && lon != null) {
+            return LatLng(lat, lon);
+          } else {
+            _showMessage('Dados inválidos de latitude/longitude.');
+          }
         } else {
-          print('Nenhum resultado encontrado.');
+          _showMessage('Resposta inválida da API.');
         }
       } else {
-        print('Erro ao buscar local: ${response.reasonPhrase}');
+        _showMessage('Erro ao buscar local: ${response.reasonPhrase}');
       }
+    } on TimeoutException {
+      _showMessage('Requisição de busca expirou.');
     } catch (e) {
-      print('Erro ao buscar local: $e');
+      _showMessage('Erro ao buscar local: $e');
     }
     return null;
+  }
+
+  String sanitizeInput(String input) {
+    final sanitized = input.replaceAll(RegExp(r'[^\w\s]'), ''); // Remove caracteres especiais
+    return sanitized.trim();
+  }
+
+  void _searchAndSetPointA() async {
+    final query = sanitizeInput(searchControllerA.text);
+    if (query.isEmpty) {
+      _showMessage('Por favor, insira um termo de busca válido.');
+      return;
+    }
+    final result = await _searchLocation(query);
+    if (result == null) {
+      _showMessage('Local não encontrado.');
+    } else {
+      _setPoint(result, true);
+    }
+  }
+
+  void _searchAndSetPointB() async {
+    final query = sanitizeInput(searchControllerB.text);
+    if (query.isEmpty) {
+      _showMessage('Por favor, insira um termo de busca válido.');
+      return;
+    }
+    final result = await _searchLocation(query);
+    if (result == null) {
+      _showMessage('Local não encontrado.');
+    } else {
+      _setPoint(result, false);
+    }
   }
 
   void _setPoint(LatLng? point, bool isPointA) {
@@ -106,14 +152,10 @@ class MapScreenState extends State<MapScreen> {
     });
   }
 
-  void _searchAndSetPointA() async {
-    final result = await _searchLocation(searchControllerA.text);
-    _setPoint(result, true);
-  }
-
-  void _searchAndSetPointB() async {
-    final result = await _searchLocation(searchControllerB.text);
-    _setPoint(result, false);
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng latlng) {
